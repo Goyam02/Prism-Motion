@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, Mic, ChevronUp, Send, Plus, Move, X, Play, RotateCw, Upload, FileText, Image as ImageIcon, Music, Film, Maximize2, Trash2, Paperclip, Download, RefreshCw, Pause, Settings, Sliders } from 'lucide-react';
+import { Menu, Mic, ChevronUp, Send, Plus, Move, X, Play, RotateCw, Upload, FileText, Image as ImageIcon, Music, Film, Maximize2, Trash2, Paperclip, Download, RefreshCw, Pause, Settings, Sliders, Volume2, Video, Layers, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { GoogleGenAI } from "@google/genai";
 
@@ -25,10 +25,10 @@ interface ChatSession {
   date: Date;
 }
 
-// Node Data Interface
+// Node Data Interface — one node per backend pipeline stage
 interface WorkflowNodeData {
   id: string;
-  type: 'input' | 'user-assets' | 'scenes' | 'fetched-assets' | 'script' | 'video';
+  type: 'input' | 'scenes' | 'script' | 'visuals' | 'animations' | 'tts' | 'render';
   title: string;
   x: number;
   y: number;
@@ -144,15 +144,6 @@ const generateGeminiText = async (prompt: string, model: string = 'gemini-2.5-fl
   }
 };
 
-const MOCK_FETCHED_IMAGES = [
-  "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=300&q=80",
-  "https://images.unsplash.com/photo-1551076805-e1869033e561?auto=format&fit=crop&w=300&q=80",
-  "https://images.unsplash.com/photo-1584036561566-b9374424e56e?auto=format&fit=crop&w=300&q=80",
-  "https://images.unsplash.com/photo-1576091160550-217358c7e618?auto=format&fit=crop&w=300&q=80",
-  "https://images.unsplash.com/photo-1581093458791-9f302e683837?auto=format&fit=crop&w=300&q=80",
-  "https://images.unsplash.com/photo-1532938911079-1b06ac7ceec7?auto=format&fit=crop&w=300&q=80"
-];
-
 // Sub-component for Video Node content to handle player state
 const VideoNodeContent = ({ url, onRegenerate }: { url: string, onRegenerate: () => void }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -253,6 +244,32 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
   const [nodes, setNodes] = useState<WorkflowNodeData[]>([]);
   const [draggedNode, setDraggedNode] = useState<string | null>(null);
   const dragNodeOffset = useRef({ x: 0, y: 0 });
+  const nodesRef = useRef<WorkflowNodeData[]>([]);
+
+  // Keep nodesRef always up-to-date
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  // WebSocket State for Creator Mode
+  const wsRef = useRef<WebSocket | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
+  const currentVideoIdRef = useRef<string | null>(null);
+  const pendingActionRef = useRef<string | null>(null);
+
+  // Keep currentVideoIdRef always up-to-date
+  useEffect(() => {
+    currentVideoIdRef.current = currentVideoId;
+  }, [currentVideoId]);
+
+  // Toast Notification State
+  const [toast, setToast] = useState<{message: string; type: 'info' | 'success' | 'error'} | null>(null);
+
+  const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   // Execution & UI State
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
@@ -283,10 +300,198 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return () => clearTimeout(timer);
     } else {
       setShowCanvas(false);
+      // Disconnect WebSocket when leaving creator mode
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+        setWsConnected(false);
+      }
     }
   }, [selectedMode]);
 
   // --- WORKFLOW LOGIC ---
+
+  // Use a ref so WebSocket always calls the latest handler
+  const handleWsMessageRef = useRef<(data: any) => void>(() => {});
+  useEffect(() => {
+    handleWsMessageRef.current = handleWebSocketMessage;
+  });
+
+  const connectWebSocket = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    const ws = new WebSocket('ws://localhost:8000/ws/creator');
+    
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      setWsConnected(true);
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      handleWsMessageRef.current(data);
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setWsConnected(false);
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+      setWsConnected(false);
+      wsRef.current = null;
+    };
+
+    wsRef.current = ws;
+  };
+
+  const handleWebSocketMessage = (data: any) => {
+    console.log('WebSocket message:', data);
+
+    if (data.status === 'session_started') {
+      setCurrentVideoId(data.video_id);
+      console.log(`✅ Session started: ${data.video_id}`);
+      console.log(`📋 Stages: ${data.stage_order?.join(' → ')}`);
+      showToast('Creator session started!', 'success');
+
+      // Remove nodes for stages not in this pipeline's stage_order
+      // and reposition remaining nodes
+      if (data.stage_order) {
+        const backendStages: string[] = data.stage_order;
+        setNodes(prev => {
+          const filtered = prev.filter(n =>
+            n.type === 'input' || backendStages.includes(n.type)
+          );
+          const gapX = 320;
+          return filtered.map((n, i) => ({
+            ...n,
+            id: String(i + 1),
+            x: i * gapX,
+            y: i % 2 === 0 ? 80 : 160, // stagger vertical position
+          }));
+        });
+      }
+    }
+
+    else if (data.status === 'stage_running') {
+      const stage = data.stage;
+      console.log(`⏳ Running stage: ${stage} (version ${data.version})`);
+      showToast(`Processing: ${stage}...`, 'info');
+      updateNodeByStage(stage, {}, false, true);
+    }
+
+    else if (data.status === 'completed') {
+      const stage = data.stage;
+      const stageData = data.data;
+      console.log(`✅ Stage completed: ${stage}`);
+      console.log(`📦 Stage data:`, stageData);
+      console.log(`📊 Progress: ${data.progress?.current}/${data.progress?.total}`);
+      showToast(`${stage} completed!`, 'success');
+      updateNodeByStage(stage, stageData, true, false);
+    }
+
+    else if (data.status === 'error') {
+      const stage = data.stage;
+      console.error(`❌ Stage ${stage} failed:`, data.error);
+      showToast(`Error in ${stage}: ${data.error}`, 'error');
+      updateNodeByStage(stage, {}, false, false);
+      alert(`Error in ${stage}: ${data.error}`);
+    }
+
+    else if (data.status === 'pipeline_complete') {
+      console.log('🎉 Pipeline complete!');
+      console.log(`📁 Video path: ${data.video_path}`);
+      showToast('Video generation complete! 🎉', 'success');
+      const renderNode = nodesRef.current.find(n => n.type === 'render');
+      if (renderNode) {
+        let videoUrl = data.video_path;
+        if (videoUrl && !videoUrl.startsWith('http')) {
+          videoUrl = `http://localhost:8000${videoUrl}`;
+        }
+        updateNodeContent(renderNode.id, { url: videoUrl }, true, false);
+      }
+    }
+  };
+
+  const updateNodeByStage = (stage: string, stageData: any, isComplete: boolean, isProcessing: boolean) => {
+    // Stage names map 1:1 to node types
+    const validStages = ['scenes', 'script', 'visuals', 'animations', 'tts', 'render'];
+    if (!validStages.includes(stage)) return;
+
+    setNodes(prev => {
+      const nodeIndex = prev.findIndex(n => n.type === stage);
+      if (nodeIndex === -1) return prev;
+
+      const node = prev[nodeIndex];
+
+      // When marking as processing, keep existing content
+      if (isProcessing && !isComplete) {
+        const updated = [...prev];
+        updated[nodeIndex] = { ...node, isProcessing: true, isComplete: false };
+        return updated;
+      }
+
+      let newContent = { ...node.content };
+
+      if (stage === 'scenes' && stageData?.scenes_data?.scenes) {
+        const scenes = stageData.scenes_data.scenes;
+        const scenesText = scenes.map((s: any) =>
+          `🎬 Scene ${s.scene_id}: ${s.concept}\n` +
+          `⏱ Duration: ${s.duration_sec}s\n` +
+          `🔍 Search: ${s.pexels_search_terms?.join(', ') || 'N/A'}`
+        ).join('\n\n');
+        newContent = { text: scenesText, sceneCount: scenes.length };
+      }
+
+      else if (stage === 'script' && stageData?.script) {
+        const scriptItems = Array.isArray(stageData.script) ? stageData.script : [];
+        const scriptText = scriptItems.map((s: any) =>
+          `🎤 Scene ${s.scene_id}:\n${s.script}`
+        ).join('\n\n---\n\n');
+        newContent = { text: scriptText || 'Script generated', scriptCount: scriptItems.length };
+      }
+
+      else if (stage === 'visuals') {
+        newContent = { text: stageData?.message || 'Compositions generated ✅' };
+      }
+
+      else if (stage === 'animations') {
+        const status = stageData?.status || 'complete';
+        newContent = { text: stageData?.message || (status === 'skipped' ? 'Animations skipped ⏭' : 'Animations generated ✅') };
+      }
+
+      else if (stage === 'tts') {
+        const audioCount = stageData?.audio_count || 0;
+        newContent = { text: stageData?.message || `🔊 Generated ${audioCount} audio files` };
+      }
+
+      else if (stage === 'render' && stageData?.video_path) {
+        let videoUrl = stageData.video_path;
+        if (!videoUrl.startsWith('http')) {
+          videoUrl = `http://localhost:8000${videoUrl}`;
+        }
+        newContent = { url: videoUrl, videoId: stageData?.video_id };
+      }
+
+      const updated = [...prev];
+      updated[nodeIndex] = {
+        ...node,
+        content: newContent,
+        isComplete,
+        isProcessing
+      };
+      return updated;
+    });
+  };
+
+  const sendWebSocketMessage = (message: any) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(message));
+    } else {
+      console.error('WebSocket not connected');
+    }
+  };
 
   const initializeWorkflow = (actionName: string) => {
     const formattedTitle = actionName.replace(/Ads/g, "Advertisements");
@@ -295,53 +500,110 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
     setPan({ x: 100, y: 100 });
     setScale(1);
 
-    const gapX = 350;
+    const gapX = 320;
     const baseWidth = 280;
     const baseHeight = 260;
+    const videoNodeWidth = 480;
+    const videoNodeHeight = 360;
 
-    const isSocial = actionName === 'Social media';
-    const videoNodeWidth = isSocial ? 320 : 480;
-    const videoNodeHeight = isSocial ? 600 : 360;
-
+    // Nodes match the backend pipeline stages 1:1
     const newNodes: WorkflowNodeData[] = [
       {
         id: '1', type: 'input', title: 'Context Input',
-        x: 0, y: 100, width: baseWidth, height: baseHeight,
+        x: 0, y: 120, width: baseWidth, height: 200,
         isProcessing: false, isComplete: true,
-        content: { text: '', fileName: null }
+        content: { text: inputValue || `Create a ${actionName} video` }
       },
       {
-        id: '2', type: 'user-assets', title: 'Your Assets',
-        x: gapX, y: 200, width: baseWidth, height: baseHeight,
-        isProcessing: false, isComplete: true,
-        content: { files: [] }
-      },
-      {
-        id: '3', type: 'scenes', title: 'Scene Generator',
-        x: gapX * 2, y: 50, width: baseWidth, height: baseHeight,
+        id: '2', type: 'scenes', title: 'Scenes',
+        x: gapX, y: 60, width: baseWidth, height: baseHeight,
         isProcessing: false, isComplete: false,
         content: { text: '' }
       },
       {
-        id: '4', type: 'fetched-assets', title: 'Fetched Assets',
-        x: gapX * 3, y: 150, width: baseWidth, height: baseHeight,
-        isProcessing: false, isComplete: false,
-        content: { images: [] }
-      },
-      {
-        id: '5', type: 'script', title: 'Script & TTS',
-        x: gapX * 4, y: 0, width: baseWidth, height: baseHeight,
+        id: '3', type: 'script', title: 'Script',
+        x: gapX * 2, y: 140, width: baseWidth, height: baseHeight,
         isProcessing: false, isComplete: false,
         content: { text: '' }
       },
       {
-        id: '6', type: 'video', title: 'Final Output',
-        x: gapX * 5, y: 250, width: videoNodeWidth, height: videoNodeHeight,
+        id: '4', type: 'visuals', title: 'Visuals',
+        x: gapX * 3, y: 40, width: baseWidth, height: baseHeight,
+        isProcessing: false, isComplete: false,
+        content: { text: '' }
+      },
+      {
+        id: '5', type: 'animations', title: 'Animations',
+        x: gapX * 4, y: 160, width: baseWidth, height: baseHeight,
+        isProcessing: false, isComplete: false,
+        content: { text: '' }
+      },
+      {
+        id: '6', type: 'tts', title: 'Text-to-Speech',
+        x: gapX * 5, y: 60, width: baseWidth, height: baseHeight,
+        isProcessing: false, isComplete: false,
+        content: { text: '' }
+      },
+      {
+        id: '7', type: 'render', title: 'Final Video',
+        x: gapX * 6, y: 100, width: videoNodeWidth, height: videoNodeHeight,
         isProcessing: false, isComplete: false,
         content: { url: null }
       }
     ];
     setNodes(newNodes);
+
+    // Store raw action name for when user manually triggers first stage
+    pendingActionRef.current = actionName;
+
+    // Connect WebSocket only — do NOT auto-start the session
+    // User must click the play button on the Scenes node to begin
+    connectWebSocket();
+  };
+
+  const startCreatorSession = (actionName: string) => {
+    const currentInput = inputValue.trim() || `Create a ${actionName} video`;
+    const config = videoSettings[actionName] || DEFAULT_CONFIGS[actionName];
+
+    let payload: any = {
+      topic: currentInput,
+      persona: config.persona,
+      tone: config.tone,
+    };
+
+    // Add action-specific fields
+    if (actionName === 'Clinical Ads') {
+      payload.drug_name = currentInput;
+      payload.indication = config.indication;
+      payload.moa_summary = config.moa_summary;
+      payload.clinical_data = config.clinical_data;
+    } else if (actionName === 'Consumer Ads') {
+      payload.brand_name = config.brand_name;
+      payload.quality = config.quality;
+    } else if (actionName === 'Disease awareness') {
+      payload.brand_name = config.brand_name;
+    } else if (actionName === 'Mechanism of action') {
+      payload.drug_name = currentInput;
+      payload.condition = config.condition;
+      payload.target_audience = config.target_audience;
+    } else if (actionName === 'Compliance') {
+      payload.prompt = currentInput;
+      payload.brand_name = config.brand_name;
+    } else if (actionName === 'Social media') {
+      payload.drug_name = currentInput;
+      payload.indication = config.indication;
+      payload.key_benefit = config.key_benefit;
+      payload.target_audience = config.target_audience;
+    }
+
+    const message = {
+      action: 'start',
+      video_type: 'product_ad', // All use product_ad for now
+      payload: payload
+    };
+
+    sendWebSocketMessage(message);
+    setInputValue('');
   };
 
   // Video Configuration State
@@ -704,45 +966,41 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
   };
 
   const runNodeProcess = async (nodeId: string) => {
-    const node = nodes.find(n => n.id === nodeId);
+    const node = nodesRef.current.find(n => n.id === nodeId);
     if (!node) return;
 
-    updateNodeContent(nodeId, {}, false, true);
+    // If no session started yet (first stage trigger), start the creator session
+    if (!currentVideoIdRef.current && pendingActionRef.current) {
+      console.log(`▶️ Starting creator session from node: ${node.title}`);
+      showToast('Starting creator session...', 'info');
+      
+      // Wait briefly for WebSocket to be fully connected, then start session
+      const waitForConnection = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          startCreatorSession(pendingActionRef.current!);
+          pendingActionRef.current = null;
+        } else {
+          setTimeout(waitForConnection, 200);
+        }
+      };
+      waitForConnection();
+      return;
+    }
 
-    try {
-      if (node.type === 'scenes') {
-        const contextNode = nodes.find(n => n.type === 'input');
-        const prompt = `Create 3 distinct video scenes for a pharmaceutical video ad about: "${contextNode?.content.text || "generic medication"}". 
-            Output ONLY the scenes. 
-            Format exactly like this for each scene:
-            
-            Scene [Number]: [Title]
-            Visual: [Description]
-            Audio: [Narration/Sound]
-            `;
-        const text = await generateGeminiText(prompt);
-        updateNodeContent(nodeId, { text }, true, false);
-      }
-      else if (node.type === 'fetched-assets') {
-        await new Promise(r => setTimeout(r, 1500));
-        updateNodeContent(nodeId, { images: MOCK_FETCHED_IMAGES }, true, false);
-      }
-      else if (node.type === 'script') {
-        const sceneNode = nodes.find(n => n.type === 'scenes');
-        const prompt = `Based on these scenes, write a clean, ready-to-read video script narration. Do not include scene headers, just the spoken text.
-            
-            Scenes:
-            ${sceneNode?.content.text}`;
-        const text = await generateGeminiText(prompt);
-        updateNodeContent(nodeId, { text }, true, false);
-      }
-      else if (node.type === 'video') {
-        await new Promise(r => setTimeout(r, 3000));
-        updateNodeContent(nodeId, { url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4' }, true, false);
-      }
-    } catch (e) {
-      console.error(e);
-      updateNodeContent(nodeId, {}, false, false);
+    // If node is complete, this is a regenerate action
+    if (node.isComplete) {
+      console.log(`🔄 Regenerating stage for node: ${node.title}`);
+      showToast(`Regenerating ${node.title}...`, 'info');
+      sendWebSocketMessage({ action: 'regenerate' });
+      return;
+    }
+
+    // If node is not complete and not processing, this is an accept action
+    // (automatically accept and move to next stage)
+    if (!node.isProcessing) {
+      console.log(`✅ Accepting stage for node: ${node.title}`);
+      showToast(`Accepted ${node.title}, moving to next stage...`, 'success');
+      sendWebSocketMessage({ action: 'accept' });
     }
   };
 
@@ -810,189 +1068,112 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
   // --- RENDER NODES ---
 
   const renderNodeContent = (node: WorkflowNodeData) => {
-    switch (node.type) {
-      case 'input':
-        return (
-          <div className="flex flex-col h-full relative">
-            <textarea
-              className="flex-1 w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm resize-none outline-none focus:border-emerald-500 transition-colors custom-scrollbar"
-              placeholder="Describe your ad requirements..."
-              value={node.content.text}
-              onChange={(e) => updateNodeContent(node.id, { text: e.target.value })}
-              onWheel={(e) => e.stopPropagation()}
-            />
-            <div className="absolute bottom-3 right-3">
-              <label className="cursor-pointer p-2 bg-white rounded-full shadow-sm border border-gray-200 hover:border-emerald-500 hover:text-emerald-600 transition-all flex items-center justify-center">
-                <input type="file" className="hidden" onChange={(e) => {
-                  if (e.target.files?.[0]) updateNodeContent(node.id, { fileName: e.target.files[0].name });
-                }} />
-                <Paperclip size={16} />
-              </label>
-            </div>
-          </div>
-        );
-      case 'user-assets':
-        return (
-          <div className="flex flex-col h-full">
-            {node.content.files.length > 0 ? (
-              <div
-                className="flex-1 overflow-y-auto custom-scrollbar p-3"
-                onWheel={(e) => e.stopPropagation()}
-              >
-                <div className="grid grid-cols-2 gap-3">
-                  {node.content.files.map((file: any, idx: number) => (
-                    <div key={idx} className="aspect-square rounded-xl overflow-hidden border border-gray-100 relative bg-gray-50 group shadow-sm hover:shadow-md transition-all">
-                      <img src={file.url} className="w-full h-full object-cover" alt="asset" />
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const newFiles = node.content.files.filter((_: any, i: number) => i !== idx);
-                          updateNodeContent(node.id, { files: newFiles });
-                        }}
-                        className="absolute top-1 right-1 p-1 bg-white/90 rounded-full text-red-500 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-
-                  <label className="aspect-square rounded-xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center cursor-pointer hover:bg-emerald-50 hover:border-emerald-300 bg-white transition-all group">
-                    <input type="file" multiple accept="image/*" className="hidden" onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                      if (e.target.files) {
-                        const newFiles = Array.from(e.target.files).map((f: File) => ({ url: URL.createObjectURL(f), file: f }));
-                        updateNodeContent(node.id, { files: [...node.content.files, ...newFiles] });
-                      }
-                    }} />
-                    <Plus size={24} className="text-gray-300 group-hover:text-emerald-500 mb-1" />
-                    <span className="text-[10px] font-medium text-gray-400 group-hover:text-emerald-600">Add Asset</span>
-                  </label>
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 p-3 flex flex-col h-full">
-                <label className="flex-1 border-2 border-dashed border-gray-200 rounded-xl flex flex-col items-center justify-center text-gray-400 hover:bg-gray-50 hover:border-emerald-300 transition-all cursor-pointer">
-                  <input type="file" multiple accept="image/*" className="hidden" onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                    if (e.target.files) {
-                      const newFiles = Array.from(e.target.files).map((f: File) => ({ url: URL.createObjectURL(f), file: f }));
-                      updateNodeContent(node.id, { files: newFiles });
-                    }
-                  }} />
-                  <Upload size={24} className="mb-2" />
-                  <span className="text-xs">Upload Images (optional)</span>
-                </label>
-              </div>
-            )}
-          </div>
-        );
-      case 'scenes':
-      case 'fetched-assets':
-      case 'script':
-        const isFetchedAssets = node.type === 'fetched-assets';
-        const isScript = node.type === 'script';
-
-        return (
-          <div className="flex flex-col h-full relative">
-            {!node.isComplete && !node.isProcessing && (
-              <div className="flex-1 flex items-center justify-center">
-                <button
-                  onClick={() => runNodeProcess(node.id)}
-                  className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-100 hover:scale-110 transition-all shadow-sm border border-emerald-100"
-                >
-                  <Play size={32} fill="currentColor" className="ml-1" />
-                </button>
-              </div>
-            )}
-
-            {node.isProcessing && (
-              <div className="flex-1 flex flex-col items-center justify-center gap-3">
-                <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-xs text-gray-500 font-medium">Generating...</span>
-              </div>
-            )}
-
-            {node.isComplete && (
-              <>
-                <div
-                  className="flex-1 overflow-y-auto custom-scrollbar p-3 pb-10"
-                  onWheel={(e) => e.stopPropagation()}
-                >
-                  {isFetchedAssets ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      {node.content.images.map((src: string, i: number) => (
-                        <div key={i} className="relative group aspect-square rounded-lg overflow-hidden border border-gray-200 cursor-pointer bg-gray-100" onClick={() => setEnlargedImage(src)}>
-                          <img src={src} className="w-full h-full object-cover" />
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const newImages = node.content.images.filter((_: any, index: number) => index !== i);
-                              updateNodeContent(node.id, { images: newImages });
-                            }}
-                            className="absolute top-1 right-1 p-1 bg-white/90 rounded-full text-red-500 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
-                          >
-                            <X size={12} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <textarea
-                      className="w-full h-full bg-transparent resize-none text-sm outline-none text-gray-700 font-mono leading-relaxed custom-scrollbar"
-                      value={node.content.text}
-                      onChange={(e) => updateNodeContent(node.id, { text: e.target.value })}
-                      onWheel={(e) => e.stopPropagation()}
-                    />
-                  )}
-                </div>
-
-                <div className="absolute bottom-1 right-1 flex gap-2">
-                  {isScript && (
-                    <button
-                      onClick={() => toggleTTS(node.content.text)}
-                      className="p-2 hover:bg-emerald-50 rounded-full text-emerald-600 bg-white shadow-sm border border-gray-100 transition-colors" title={ttsState === 'playing' ? "Pause" : "Play TTS"}
-                    >
-                      {ttsState === 'playing' ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
-                    </button>
-                  )}
-                  <button
-                    onClick={() => runNodeProcess(node.id)}
-                    className="p-2 hover:bg-gray-100 rounded-full text-gray-600 hover:rotate-180 transition-transform duration-500 bg-white shadow-sm border border-gray-100"
-                    title="Regenerate"
-                  >
-                    <RefreshCw size={14} />
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        );
-      case 'video':
-        return (
-          <div className="flex flex-col h-full relative bg-gray-50 p-3">
-            {!node.isComplete && !node.isProcessing && (
-              <div className="flex-1 flex items-center justify-center bg-black/5 rounded-lg">
-                <button
-                  onClick={() => runNodeProcess(node.id)}
-                  className="w-20 h-20 bg-[#006838] text-white rounded-full flex items-center justify-center hover:bg-[#00502b] hover:scale-105 transition-all shadow-xl"
-                >
-                  <Play size={36} fill="currentColor" className="ml-1" />
-                </button>
-              </div>
-            )}
-            {node.isProcessing && (
-              <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-lg">
-                <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin mb-3" />
-                <span className="text-white/70 text-sm">Rendering Video...</span>
-              </div>
-            )}
-            {node.isComplete && (
-              <VideoNodeContent
-                url={node.content.url}
-                onRegenerate={() => runNodeProcess(node.id)}
-              />
-            )}
-          </div>
-        );
+    // --- Input node (always complete, editable) ---
+    if (node.type === 'input') {
+      return (
+        <div className="flex flex-col h-full relative">
+          <textarea
+            className="flex-1 w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm resize-none outline-none focus:border-emerald-500 transition-colors custom-scrollbar"
+            placeholder="Describe your ad requirements..."
+            value={node.content.text || ''}
+            onChange={(e) => updateNodeContent(node.id, { text: e.target.value })}
+            onWheel={(e) => e.stopPropagation()}
+          />
+        </div>
+      );
     }
+
+    // --- Render / Final Video node ---
+    if (node.type === 'render') {
+      return (
+        <div className="flex flex-col h-full relative bg-gray-50 p-3">
+          {!node.isComplete && !node.isProcessing && (
+            <div className="flex-1 flex items-center justify-center bg-black/5 rounded-lg">
+              <button
+                onClick={() => runNodeProcess(node.id)}
+                className="w-20 h-20 bg-[#006838] text-white rounded-full flex items-center justify-center hover:bg-[#00502b] hover:scale-105 transition-all shadow-xl"
+              >
+                <Play size={36} fill="currentColor" className="ml-1" />
+              </button>
+            </div>
+          )}
+          {node.isProcessing && (
+            <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-lg">
+              <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin mb-3" />
+              <span className="text-white/70 text-sm">Rendering Video...</span>
+            </div>
+          )}
+          {node.isComplete && node.content.url && (
+            <VideoNodeContent
+              url={node.content.url}
+              onRegenerate={() => runNodeProcess(node.id)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // --- All pipeline stage nodes (scenes, script, visuals, animations, tts) ---
+    return (
+      <div className="flex flex-col h-full relative">
+        {/* Pending state — play button to accept/trigger */}
+        {!node.isComplete && !node.isProcessing && (
+          <div className="flex-1 flex items-center justify-center">
+            <button
+              onClick={() => runNodeProcess(node.id)}
+              className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-600 hover:bg-emerald-100 hover:scale-110 transition-all shadow-sm border border-emerald-100"
+            >
+              <Play size={32} fill="currentColor" className="ml-1" />
+            </button>
+          </div>
+        )}
+
+        {/* Processing state — spinner */}
+        {node.isProcessing && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+            <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-gray-500 font-medium">Generating...</span>
+          </div>
+        )}
+
+        {/* Complete state — show the result */}
+        {node.isComplete && (
+          <>
+            <div
+              className="flex-1 overflow-y-auto custom-scrollbar p-3 pb-10"
+              onWheel={(e) => e.stopPropagation()}
+            >
+              <textarea
+                className="w-full h-full bg-transparent resize-none text-sm outline-none text-gray-700 font-mono leading-relaxed custom-scrollbar"
+                value={node.content.text || ''}
+                onChange={(e) => updateNodeContent(node.id, { text: e.target.value })}
+                onWheel={(e) => e.stopPropagation()}
+              />
+            </div>
+
+            {/* Bottom action buttons */}
+            <div className="absolute bottom-1 right-1 flex gap-2">
+              {node.type === 'script' && (
+                <button
+                  onClick={() => toggleTTS(node.content.text || '')}
+                  className="p-2 hover:bg-emerald-50 rounded-full text-emerald-600 bg-white shadow-sm border border-gray-100 transition-colors"
+                  title={ttsState === 'playing' ? "Pause" : "Play TTS"}
+                >
+                  {ttsState === 'playing' ? <Pause size={14} fill="currentColor" /> : <Volume2 size={14} />}
+                </button>
+              )}
+              <button
+                onClick={() => runNodeProcess(node.id)}
+                className="p-2 hover:bg-gray-100 rounded-full text-gray-600 hover:rotate-180 transition-transform duration-500 bg-white shadow-sm border border-gray-100"
+                title="Regenerate"
+              >
+                <RefreshCw size={14} />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
   };
 
   const renderInputBox = () => {
@@ -1623,12 +1804,35 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     >
                       <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs uppercase tracking-wider">
                         {node.type === 'input' && <FileText size={14} />}
-                        {node.type === 'user-assets' && <Upload size={14} />}
                         {node.type === 'scenes' && <Film size={14} />}
-                        {node.type === 'fetched-assets' && <ImageIcon size={14} />}
-                        {node.type === 'script' && <Music size={14} />}
-                        {node.type === 'video' && <Play size={14} />}
+                        {node.type === 'script' && <FileText size={14} />}
+                        {node.type === 'visuals' && <ImageIcon size={14} />}
+                        {node.type === 'animations' && <Wand2 size={14} />}
+                        {node.type === 'tts' && <Volume2 size={14} />}
+                        {node.type === 'render' && <Video size={14} />}
                         {node.title}
+                      </div>
+                      
+                      {/* Status Badge */}
+                      <div className="flex items-center gap-1">
+                        {node.isProcessing && (
+                          <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-[10px] font-semibold">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                            PROCESSING
+                          </div>
+                        )}
+                        {node.isComplete && !node.isProcessing && (
+                          <div className="flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-semibold">
+                            <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                            COMPLETE
+                          </div>
+                        )}
+                        {!node.isProcessing && !node.isComplete && (
+                          <div className="flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-600 rounded-full text-[10px] font-semibold">
+                            <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                            PENDING
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1666,6 +1870,36 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
           </div>
         </div>
       </main>
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 animate-[slideIn_0.3s_ease-out]">
+          <div className={`
+            flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg border
+            ${toast.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : ''}
+            ${toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : ''}
+            ${toast.type === 'info' ? 'bg-blue-50 border-blue-200 text-blue-800' : ''}
+          `}>
+            {toast.type === 'success' && <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>}
+            {toast.type === 'error' && <div className="w-2 h-2 bg-red-500 rounded-full"></div>}
+            {toast.type === 'info' && <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>}
+            <span className="text-sm font-medium">{toast.message}</span>
+          </div>
+        </div>
+      )}
+      
+      <style>{`
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+      `}</style>
     </div>
   );
 };
