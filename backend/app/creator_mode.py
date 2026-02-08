@@ -490,13 +490,14 @@ async def _execute_render_stage(session: CreatorSession) -> Dict[str, Any]:
     else:
         raise ValueError(f"Unsupported video_type: {video_type}")
     
-    # Store final path
-    session.stage_outputs["final_video"] = str(final_path)
+    # Store as URL path (not filesystem path) to match REST endpoints
+    video_url = f"/outputs/videos/{video_id}/final.mp4"
+    session.stage_outputs["final_video"] = video_url
     
     return {
         "status": "complete",
         "message": "Video rendered successfully",
-        "video_path": str(final_path),
+        "video_path": video_url,
         "video_id": video_id,
     }
 
