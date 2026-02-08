@@ -316,7 +316,7 @@ def _call_sadtalker_service(audio_path: str, image_path: Optional[str], sadtalke
     status_url = base + f"/video/status/{job_id}"
     result_url = base + f"/video/result/{job_id}"
 
-    timeout_secs = 2400  # 40 minutes (Sadtalker can take 30+ minutes)
+    timeout_secs = 6000  # 40 minutes (Sadtalker can take 30+ minutes)
     poll_interval = 5
     waited = 0
     while waited < timeout_secs:

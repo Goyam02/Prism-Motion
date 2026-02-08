@@ -69,6 +69,7 @@ interface VideoConfig {
   clinical_data?: string;
   moa_summary?: string;
   condition?: string;
+  region?: string;
 }
 
 const DEFAULT_CONFIGS: Record<string, VideoConfig> = {
@@ -90,7 +91,8 @@ const DEFAULT_CONFIGS: Record<string, VideoConfig> = {
   'Disease awareness': {
     brand_name: "",
     persona: "professional narrator",
-    tone: "clear and reassuring"
+    tone: "clear and reassuring",
+    region: "global"
   },
   'Mechanism of action': {
     condition: "General Condition",
@@ -235,6 +237,11 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
   const [activeChip, setActiveChip] = useState<string | null>(null);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
 
+  // NEW: File Upload States
+  const [uploadedDocuments, setUploadedDocuments] = useState<File[]>([]);
+  const [uploadedImages, setUploadedImages] = useState<File[]>([]);
+  const [uploadedLogo, setUploadedLogo] = useState<File | null>(null);
+
   // Chat History State
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
@@ -359,28 +366,23 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
     }));
   };
 
-  // FIX: Handle Quick Action Click - Set context first, then let user trigger execution
+  // Handle Quick Action Click
   const handleQuickAction = async (text: string) => {
     if (!userData || !userData.companyName) {
       alert("Please complete onboarding first.");
       return;
     }
 
-    // Set the settings context to match the selected action
     setSettingsContext(text);
 
     if (selectedMode === 'agent') {
-      // In agent mode, set active chip instead of immediately executing
       setActiveChip(text);
-      // Optional: Show settings panel automatically
-      // setShowSettings(true);
     } else {
-      // In creator mode, initialize workflow
       initializeWorkflow(text);
     }
   };
 
-  // NEW: Execute the actual video creation with current settings
+  // Execute video creation with proper backend integration
   const executeVideoCreation = async (actionType: string) => {
     const endpoint = CREATE_ENDPOINTS[actionType];
     if (!endpoint) return;
@@ -406,54 +408,76 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
     setMessages(prev => [...prev, userMsg, loadingMsg]);
     setInputValue('');
 
-    let payload: any = { user_id: userId };
+    // Build FormData with proper file uploads
+    const formData = new FormData();
+    formData.append('user_id', userId || '');
+
     const config = videoSettings[actionType] || DEFAULT_CONFIGS[actionType];
 
-    if (actionType === 'Clinical Ads') {
-      payload.drug_name = currentInput;
-      payload.indication = config.indication;
-      payload.moa_summary = config.moa_summary;
-      payload.clinical_data = config.clinical_data;
-      payload.persona = config.persona;
-      payload.tone = config.tone;
-      payload.quality = config.quality;
-    } else if (actionType === 'Consumer Ads') {
-      payload.topic = currentInput;
-      payload.brand_name = config.brand_name;
-      payload.persona = config.persona;
-      payload.tone = config.tone;
-      payload.quality = config.quality === 'low' ? 'high' : config.quality;
-      payload.integrate_sadtalker = config.integrate_sadtalker;
-    } else if (actionType === 'Disease awareness') {
-      payload.topic = currentInput;
-      payload.video_type = "product_ad";
-      payload.brand_name = config.brand_name;
-      payload.persona = config.persona;
-      payload.tone = config.tone;
-    } else if (actionType === 'Mechanism of action') {
-      payload.drug_name = currentInput;
-      payload.condition = config.condition;
-      payload.target_audience = config.target_audience;
-      payload.persona = config.persona;
-      payload.tone = config.tone;
-      payload.quality = config.quality;
-    } else if (actionType === 'Compliance') {
-      payload.prompt = currentInput;
-      payload.video_type = "compliance_video";
-      payload.brand_name = config.brand_name;
-      payload.persona = config.persona;
-      payload.tone = config.tone;
-    } else if (actionType === 'Social media') {
-      payload.drug_name = currentInput;
-      payload.indication = config.indication;
-      payload.key_benefit = config.key_benefit;
-      payload.target_audience = config.target_audience;
-      payload.persona = config.persona;
-      payload.tone = config.tone;
-      payload.quality = config.quality;
+    // Add files based on action type
+    if (uploadedLogo) {
+      formData.append('logo', uploadedLogo);
     }
 
-    const response = await createVideo(endpoint, payload);
+    // Add multiple images
+    uploadedImages.forEach(image => {
+      formData.append('images', image);
+    });
+
+    // Add multiple documents
+    uploadedDocuments.forEach(doc => {
+      formData.append('documents', doc);
+    });
+
+    // Add config based on action type
+    if (actionType === 'Clinical Ads') {
+      formData.append('drug_name', currentInput);
+      formData.append('indication', config.indication || '');
+      formData.append('moa_summary', config.moa_summary || '');
+      formData.append('clinical_data', config.clinical_data || '');
+      formData.append('persona', config.persona);
+      formData.append('tone', config.tone);
+      formData.append('quality', config.quality || 'low');
+    } else if (actionType === 'Consumer Ads') {
+      formData.append('topic', currentInput);
+      formData.append('brand_name', config.brand_name || '');
+      formData.append('persona', config.persona);
+      formData.append('tone', config.tone);
+      formData.append('quality', config.quality === 'low' ? 'high' : config.quality || 'high');
+      formData.append('integrate_sadtalker', config.integrate_sadtalker ? 'true' : 'false');
+    } else if (actionType === 'Disease awareness') {
+      formData.append('topic', currentInput);
+      formData.append('video_type', 'product_ad');
+      formData.append('brand_name', config.brand_name || '');
+      formData.append('persona', config.persona);
+      formData.append('tone', config.tone);
+      if (config.region) {
+        formData.append('region', config.region);
+      }
+    } else if (actionType === 'Mechanism of action') {
+      formData.append('drug_name', currentInput);
+      formData.append('condition', config.condition || '');
+      formData.append('target_audience', config.target_audience || 'healthcare professionals');
+      formData.append('persona', config.persona);
+      formData.append('tone', config.tone);
+      formData.append('quality', config.quality || 'low');
+    } else if (actionType === 'Compliance') {
+      formData.append('prompt', currentInput);
+      formData.append('video_type', 'compliance_video');
+      formData.append('brand_name', config.brand_name || '');
+      formData.append('persona', config.persona);
+      formData.append('tone', config.tone);
+    } else if (actionType === 'Social media') {
+      formData.append('drug_name', currentInput);
+      formData.append('indication', config.indication || '');
+      formData.append('key_benefit', config.key_benefit || '');
+      formData.append('target_audience', config.target_audience || 'patients');
+      formData.append('persona', config.persona);
+      formData.append('tone', config.tone);
+      formData.append('quality', config.quality || 'low');
+    }
+
+    const response = await createVideo(endpoint, formData);
 
     setMessages(prev => prev.map(msg => {
       if (msg.id === loadingMsgId) {
@@ -482,6 +506,11 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }
       return msg;
     }));
+
+    // Clear uploaded files after successful submission
+    setUploadedDocuments([]);
+    setUploadedImages([]);
+    setUploadedLogo(null);
   };
 
   const startPolling = (videoId: string, messageId: string, videoUrl: string) => {
@@ -534,22 +563,17 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
 
   // --- BACKEND INTEGRATION ---
 
-  const createVideo = async (endpoint: string, data: any) => {
+  const createVideo = async (endpoint: string, formData: FormData) => {
     try {
-      const formData = new FormData();
-
-      Object.keys(data).forEach(key => {
-        if (data[key] !== undefined && data[key] !== null) {
-          formData.append(key, data[key]);
-        }
-      });
-
       const res = await fetch(`http://localhost:8000${endpoint}`, {
         method: "POST",
         body: formData
       });
 
-      if (!res.ok) throw new Error(`Video creation failed for ${endpoint}`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Video creation failed: ${errorText}`);
+      }
       return await res.json();
     } catch (error) {
       console.error(`Error creating video (${endpoint}):`, error);
@@ -685,6 +709,57 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
     setActiveChip(null);
     setAttachedFile(null);
     setCurrentSessionId(null);
+    setUploadedDocuments([]);
+    setUploadedImages([]);
+    setUploadedLogo(null);
+  };
+
+  // --- FILE UPLOAD HANDLERS ---
+
+  const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newDocs = Array.from(files).filter((f: File) =>
+      f.type === 'application/pdf' ||
+      f.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      f.type === 'text/plain' ||
+      f.name.endsWith('.pdf') ||
+      f.name.endsWith('.docx') ||
+      f.name.endsWith('.txt')
+    );
+
+    setUploadedDocuments(prev => [...prev, ...newDocs]);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newImages = Array.from(files).filter((f: File) =>
+      f.type.startsWith('image/')
+    );
+
+    setUploadedImages(prev => [...prev, ...newImages]);
+  };
+
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setUploadedLogo(e.target.files[0]);
+    }
+  };
+
+  const removeDocument = (index: number) => {
+    setUploadedDocuments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeImage = (index: number) => {
+    setUploadedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeLogo = () => {
+    setUploadedLogo(null);
   };
 
   // --- CANVAS & NODE OPERATIONS ---
@@ -1037,15 +1112,107 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             </div>
           )}
 
+          {/* File Upload Indicators */}
+          {uploadedDocuments.length > 0 && (
+            <div className="flex-shrink-0 bg-purple-100 text-purple-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm">
+              <FileText size={12} />
+              <span>{uploadedDocuments.length} doc(s)</span>
+            </div>
+          )}
+          {uploadedImages.length > 0 && (
+            <div className="flex-shrink-0 bg-pink-100 text-pink-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm">
+              <ImageIcon size={12} />
+              <span>{uploadedImages.length} image(s)</span>
+            </div>
+          )}
+          {uploadedLogo && (
+            <div className="flex-shrink-0 bg-indigo-100 text-indigo-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm">
+              <ImageIcon size={12} />
+              <span>Logo</span>
+            </div>
+          )}
+
           {showSettings && (
-            <div className="absolute bottom-full mb-4 right-0 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 p-5 z-50 animate-in fade-in slide-in-from-bottom-5">
+            <div className="relative top-full mt-4 right-0
+  w-[400px]
+  bg-white rounded-2xl shadow-xl border border-gray-100
+  p-5 z-50
+  max-h-[70vh] overflow-y-auto
+  custom-scrollbar">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                  <Sliders size={16} /> Configuration
+                  <Sliders size={16} /> Configuration & Assets
                 </h3>
                 <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600">
                   <X size={16} />
                 </button>
+              </div>
+
+              {/* File Upload Section */}
+              <div className="mb-6 pb-6 border-b border-gray-100">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Upload Assets</h4>
+                
+                {/* Logo Upload */}
+                <div className="mb-4">
+                  <label className="block text-xs font-medium text-gray-600 mb-2">Company Logo</label>
+                  {uploadedLogo ? (
+                    <div className="flex items-center gap-2 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
+                      <ImageIcon size={16} className="text-indigo-600" />
+                      <span className="text-sm text-indigo-800 flex-1 truncate">{uploadedLogo.name}</span>
+                      <button onClick={removeLogo} className="p-1 hover:bg-indigo-100 rounded">
+                        <X size={14} className="text-indigo-600" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="block w-full p-3 border-2 border-dashed border-gray-200 rounded-lg hover:border-emerald-300 hover:bg-emerald-50 cursor-pointer transition-all text-center">
+                      <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                      <Upload size={20} className="mx-auto mb-1 text-gray-400" />
+                      <span className="text-xs text-gray-500">Click to upload logo</span>
+                    </label>
+                  )}
+                </div>
+
+                {/* Product Images Upload */}
+                <div className="mb-4">
+                  <label className="block text-xs font-medium text-gray-600 mb-2">Product Images</label>
+                  <div className="space-y-2">
+                    {uploadedImages.map((img, idx) => (
+                      <div key={idx} className="flex items-center gap-2 p-2 bg-pink-50 rounded-lg border border-pink-200">
+                        <ImageIcon size={16} className="text-pink-600" />
+                        <span className="text-sm text-pink-800 flex-1 truncate">{img.name}</span>
+                        <button onClick={() => removeImage(idx)} className="p-1 hover:bg-pink-100 rounded">
+                          <X size={14} className="text-pink-600" />
+                        </button>
+                      </div>
+                    ))}
+                    <label className="block w-full p-3 border-2 border-dashed border-gray-200 rounded-lg hover:border-emerald-300 hover:bg-emerald-50 cursor-pointer transition-all text-center">
+                      <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
+                      <Upload size={20} className="mx-auto mb-1 text-gray-400" />
+                      <span className="text-xs text-gray-500">Click to add images</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Documents Upload */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-2">Reference Documents (PDF, DOCX, TXT)</label>
+                  <div className="space-y-2">
+                    {uploadedDocuments.map((doc, idx) => (
+                      <div key={idx} className="flex items-center gap-2 p-2 bg-purple-50 rounded-lg border border-purple-200">
+                        <FileText size={16} className="text-purple-600" />
+                        <span className="text-sm text-purple-800 flex-1 truncate">{doc.name}</span>
+                        <button onClick={() => removeDocument(idx)} className="p-1 hover:bg-purple-100 rounded">
+                          <X size={14} className="text-purple-600" />
+                        </button>
+                      </div>
+                    ))}
+                    <label className="block w-full p-3 border-2 border-dashed border-gray-200 rounded-lg hover:border-emerald-300 hover:bg-emerald-50 cursor-pointer transition-all text-center">
+                      <input type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" multiple className="hidden" onChange={handleDocumentUpload} />
+                      <Upload size={20} className="mx-auto mb-1 text-gray-400" />
+                      <span className="text-xs text-gray-500">Click to upload documents</span>
+                    </label>
+                  </div>
+                </div>
               </div>
 
               <div className="mb-4">
@@ -1061,7 +1228,7 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                 </select>
               </div>
 
-              <div className="space-y-4 max-h-[50vh] overflow-y-auto custom-scrollbar pr-1">
+              <div className="space-y-4">
                 <div>
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Persona</label>
                   <select
@@ -1109,6 +1276,25 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                         </button>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {settingsContext === 'Disease awareness' && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Region</label>
+                    <select
+                      className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      value={videoSettings[settingsContext].region || 'global'}
+                      onChange={(e) => handleSettingChange('region', e.target.value)}
+                    >
+                      <option value="global">Global</option>
+                      <option value="india">India</option>
+                      <option value="africa">Africa</option>
+                      <option value="europe">Europe</option>
+                      <option value="asia">Asia</option>
+                      <option value="north_america">North America</option>
+                      <option value="south_america">South America</option>
+                    </select>
                   </div>
                 )}
 
@@ -1221,7 +1407,7 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             <button
               onClick={() => setShowSettings(!showSettings)}
               className={`p-3 rounded-full transition-all ${showSettings ? 'bg-emerald-50 text-emerald-600' : 'hover:bg-gray-50 text-gray-400'}`}
-              title="Video Configuration"
+              title="Video Configuration & Assets"
             >
               <Settings size={20} />
             </button>
