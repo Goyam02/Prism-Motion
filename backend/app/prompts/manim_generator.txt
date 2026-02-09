@@ -622,3 +622,6 @@ png_library/molecular/proteins/y-shaped-antibody.png
 ```
 png_library/other/objects/banana.png
 ```
+
+
+THE VIDEO NEEDS TO BE SCIENTIFIC AND TECHNICAL KEEPING ALL THESE CONSTRAINTS.

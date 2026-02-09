@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Menu, Mic, ChevronUp, Send, Plus, Move, X, Play, RotateCw, Upload, FileText, Image as ImageIcon, Music, Film, Maximize2, Trash2, Paperclip, Download, RefreshCw, Pause, Settings, Sliders, Volume2, Video, Layers, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { GoogleGenAI } from "@google/genai";
-
 interface MainAppProps {
   userData: {
     companyName: string;
@@ -10,7 +9,6 @@ interface MainAppProps {
   };
   initialMode: 'agent' | 'creator';
 }
-
 interface Message {
   id: string;
   role: 'user' | 'ai';
@@ -18,13 +16,11 @@ interface Message {
   videoUrl?: string;
   isLoading?: boolean;
 }
-
 interface ChatSession {
   id: string;
   title: string;
   date: Date;
 }
-
 // Node Data Interface — one node per backend pipeline stage
 interface WorkflowNodeData {
   id: string;
@@ -38,7 +34,6 @@ interface WorkflowNodeData {
   isComplete: boolean;
   content: any;
 }
-
 const QUICK_ACTIONS = [
   'Clinical Ads',
   'Consumer Ads',
@@ -47,7 +42,6 @@ const QUICK_ACTIONS = [
   'Compliance',
   'Social media'
 ];
-
 const CREATE_ENDPOINTS: Record<string, string> = {
   'Clinical Ads': "/create-doctor",
   'Consumer Ads': "/create-sm-rm",
@@ -56,7 +50,6 @@ const CREATE_ENDPOINTS: Record<string, string> = {
   'Compliance': "/create-compliance",
   'Social media': "/create-sm"
 };
-
 interface VideoConfig {
   quality?: 'low' | 'medium' | 'high';
   tone: string;
@@ -71,7 +64,6 @@ interface VideoConfig {
   condition?: string;
   region?: string;
 }
-
 const DEFAULT_CONFIGS: Record<string, VideoConfig> = {
   'Clinical Ads': {
     indication: "General Indication",
@@ -115,23 +107,21 @@ const DEFAULT_CONFIGS: Record<string, VideoConfig> = {
     quality: "low"
   }
 };
-
 // Animation Constants
 const ANIM_DURATION = 220;
 const ANIM_STAGGER = 70;
 const UI_SWAP_DELAY = 600;
-
 // Fallback Key provided by user
 const USER_FALLBACK_KEY = "AIzaSyCfeB7MtwyQ9ipV9mTiaPwMeJ0YfEFz35U";
-
 const getAnimationDelay = (index: number) => `${index * ANIM_STAGGER}ms`;
-
+// LocalStorage Keys
+const CHATS_SESSIONS_KEY = 'prism_chats_sessions';
+const CHATS_MESSAGES_KEY = 'prism_chats_messages';
 // Helper to call Gemini
 const generateGeminiText = async (prompt: string, model: string = 'gemini-2.5-flash'): Promise<string> => {
   try {
     const apiKey = process.env.API_KEY || USER_FALLBACK_KEY;
     if (!apiKey) throw new Error("No API Key");
-
     const ai = new GoogleGenAI({ apiKey: apiKey });
     const response = await ai.models.generateContent({
       model: model,
@@ -145,13 +135,11 @@ const generateGeminiText = async (prompt: string, model: string = 'gemini-2.5-fl
     return "Generated content unavailable.";
   }
 };
-
 // Sub-component for Video Node content to handle player state
 const VideoNodeContent = ({ url, onRegenerate }: { url: string, onRegenerate: () => void }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [showControls, setShowControls] = useState(false);
-
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!videoRef.current) return;
@@ -162,7 +150,6 @@ const VideoNodeContent = ({ url, onRegenerate }: { url: string, onRegenerate: ()
     }
     setIsPlaying(!isPlaying);
   };
-
   return (
     <div
       className="relative w-full h-full rounded-lg overflow-hidden bg-gray-100 group"
@@ -181,7 +168,6 @@ const VideoNodeContent = ({ url, onRegenerate }: { url: string, onRegenerate: ()
         onPause={() => setIsPlaying(false)}
         onClick={togglePlay}
       />
-
       <div
         className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'}`}
       >
@@ -189,7 +175,6 @@ const VideoNodeContent = ({ url, onRegenerate }: { url: string, onRegenerate: ()
           {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
         </div>
       </div>
-
       <div className="absolute bottom-1 right-1 flex gap-2 pointer-events-auto z-10">
         <button
           onClick={(e) => { e.stopPropagation(); onRegenerate(); }}
@@ -208,37 +193,65 @@ const VideoNodeContent = ({ url, onRegenerate }: { url: string, onRegenerate: ()
     </div>
   );
 };
-
+// LocalStorage Helpers
+const saveSessions = (sessions: ChatSession[]) => {
+  localStorage.setItem(CHATS_SESSIONS_KEY, JSON.stringify(sessions.map(s => ({ ...s, date: s.date.toISOString() }))));
+};
+const loadSessions = (): ChatSession[] => {
+  const str = localStorage.getItem(CHATS_SESSIONS_KEY);
+  if (!str) return [];
+  try {
+    return JSON.parse(str).map((s: any) => ({ ...s, date: new Date(s.date) }));
+  } catch {
+    return [];
+  }
+};
+const saveMessages = (sessionId: string, msgs: Message[]) => {
+  const allStr = localStorage.getItem(CHATS_MESSAGES_KEY);
+  const all: Record<string, Message[]> = allStr ? JSON.parse(allStr) : {};
+  all[sessionId] = msgs;
+  localStorage.setItem(CHATS_MESSAGES_KEY, JSON.stringify(all));
+};
+const loadMessages = (sessionId: string): Message[] => {
+  const allStr = localStorage.getItem(CHATS_MESSAGES_KEY);
+  const all: Record<string, Message[]> = allStr ? JSON.parse(allStr) : {};
+  return all[sessionId] || [];
+};
 const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedMode, setSelectedMode] = useState<'agent' | 'creator'>(initialMode);
   const navigate = useNavigate();
-
   useEffect(() => {
     setSelectedMode(initialMode);
   }, [initialMode]);
-
   const handleModeSwitch = (mode: 'agent' | 'creator') => {
     setSelectedMode(mode);
     navigate(`/${mode}`);
   };
-
   // Input & Chips State
   const [inputValue, setInputValue] = useState('');
   const [activeChip, setActiveChip] = useState<string | null>(null);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
-
   // NEW: File Upload States
   const [uploadedDocuments, setUploadedDocuments] = useState<File[]>([]);
   const [uploadedImages, setUploadedImages] = useState<File[]>([]);
   const [uploadedLogo, setUploadedLogo] = useState<File | null>(null);
-
   // Chat History State
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
+  // Load sessions on mount
+  useEffect(() => {
+    const sessions = loadSessions();
+    setChatSessions(sessions);
+  }, []);
+  // Persist messages when they change
+  useEffect(() => {
+    if (currentSessionId) {
+      saveMessages(currentSessionId, messages);
+    }
+  }, [messages, currentSessionId]);
   // Canvas State
   const [showCanvas, setShowCanvas] = useState(false);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -246,49 +259,39 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0 });
   const [creatorAction, setCreatorAction] = useState<string | null>(null);
-
   // Workflow Nodes State
   const [nodes, setNodes] = useState<WorkflowNodeData[]>([]);
   const [draggedNode, setDraggedNode] = useState<string | null>(null);
   const dragNodeOffset = useRef({ x: 0, y: 0 });
   const nodesRef = useRef<WorkflowNodeData[]>([]);
-
   // Keep nodesRef always up-to-date
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
-
   // WebSocket State for Creator Mode
   const wsRef = useRef<WebSocket | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
   const currentVideoIdRef = useRef<string | null>(null);
   const pendingActionRef = useRef<string | null>(null);
-
   // Keep currentVideoIdRef always up-to-date
   useEffect(() => {
     currentVideoIdRef.current = currentVideoId;
   }, [currentVideoId]);
-
   // Toast Notification State
   const [toast, setToast] = useState<{message: string; type: 'info' | 'success' | 'error'} | null>(null);
-
   const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
-
   // Execution & UI State
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
   const [ttsState, setTtsState] = useState<'idle' | 'playing' | 'paused'>('idle');
   const ttsUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-
   // Logo
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
-
   // Execution Status
   const isGlobalProcessing = nodes.some(n => n.isProcessing);
-
   useEffect(() => {
     if (userData.logo) {
       const url = URL.createObjectURL(userData.logo);
@@ -296,11 +299,9 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return () => URL.revokeObjectURL(url);
     }
   }, [userData.logo]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
   useEffect(() => {
     if (selectedMode === 'creator') {
       const timer = setTimeout(() => setShowCanvas(true), UI_SWAP_DELAY);
@@ -315,53 +316,42 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }
     }
   }, [selectedMode]);
-
   // --- WORKFLOW LOGIC ---
-
   // Use a ref so WebSocket always calls the latest handler
   const handleWsMessageRef = useRef<(data: any) => void>(() => {});
   useEffect(() => {
     handleWsMessageRef.current = handleWebSocketMessage;
   });
-
   const connectWebSocket = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
     const ws = new WebSocket('ws://localhost:8000/ws/creator');
-    
+   
     ws.onopen = () => {
       console.log('WebSocket connected');
       setWsConnected(true);
     };
-
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       handleWsMessageRef.current(data);
     };
-
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
       setWsConnected(false);
     };
-
     ws.onclose = () => {
       console.log('WebSocket disconnected');
       setWsConnected(false);
       wsRef.current = null;
     };
-
     wsRef.current = ws;
   };
-
   const handleWebSocketMessage = (data: any) => {
     console.log('WebSocket message:', data);
-
     if (data.status === 'session_started') {
       setCurrentVideoId(data.video_id);
       console.log(`✅ Session started: ${data.video_id}`);
       console.log(`📋 Stages: ${data.stage_order?.join(' → ')}`);
       showToast('Creator session started!', 'success');
-
       // Remove nodes for stages not in this pipeline's stage_order
       // and reposition remaining nodes
       if (data.stage_order) {
@@ -380,14 +370,12 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         });
       }
     }
-
     else if (data.status === 'stage_running') {
       const stage = data.stage;
       console.log(`⏳ Running stage: ${stage} (version ${data.version})`);
       showToast(`Processing: ${stage}...`, 'info');
       updateNodeByStage(stage, {}, false, true);
     }
-
     else if (data.status === 'completed') {
       const stage = data.stage;
       const stageData = data.data;
@@ -397,7 +385,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       showToast(`${stage} completed!`, 'success');
       updateNodeByStage(stage, stageData, true, false);
     }
-
     else if (data.status === 'error') {
       const stage = data.stage;
       console.error(`❌ Stage ${stage} failed:`, data.error);
@@ -405,42 +392,67 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       updateNodeByStage(stage, {}, false, false);
       alert(`Error in ${stage}: ${data.error}`);
     }
+else if (data.status === 'pipeline_complete') {
+  console.log('🎉 Pipeline complete!');
+  console.log(`📁 Video path: ${data.video_path}`);
+  showToast('Video generation complete! 🎉', 'success');
 
-    else if (data.status === 'pipeline_complete') {
-      console.log('🎉 Pipeline complete!');
-      console.log(`📁 Video path: ${data.video_path}`);
-      showToast('Video generation complete! 🎉', 'success');
-      const renderNode = nodesRef.current.find(n => n.type === 'render');
-      if (renderNode) {
-        let videoUrl = data.video_path;
-        if (videoUrl && !videoUrl.startsWith('http')) {
-          videoUrl = `http://localhost:8000${videoUrl}`;
-        }
-        updateNodeContent(renderNode.id, { url: videoUrl }, true, false);
-      }
+  // Declare videoUrl in the outer scope so it's accessible later
+  let finalVideoUrl: string | undefined = undefined;
+
+  const renderNode = nodesRef.current.find(n => n.type === 'render');
+  if (renderNode) {
+    finalVideoUrl = data.video_path;
+    if (finalVideoUrl && !finalVideoUrl.startsWith('http')) {
+      finalVideoUrl = `http://localhost:8000${finalVideoUrl}`;
     }
-  };
+    updateNodeContent(renderNode.id, { url: finalVideoUrl }, true, false);
+  }
 
+  // Now it's safe to use finalVideoUrl here
+  if (currentSessionId && finalVideoUrl) {
+    const videoMsg: Message = {
+      id: Date.now().toString(),
+      role: 'ai',
+      text: 'Your video from Creator Mode is ready!',
+      videoUrl: finalVideoUrl,
+    };
+
+    setMessages(prev => {
+      const newMsgs = [...prev, videoMsg];
+      saveMessages(currentSessionId, newMsgs);
+      return newMsgs;
+    });
+  } else if (currentSessionId) {
+    // Optional fallback message if no URL was generated
+    const fallbackMsg: Message = {
+      id: Date.now().toString(),
+      role: 'ai',
+      text: 'Video generation completed, but could not retrieve video URL.',
+    };
+    setMessages(prev => {
+      const newMsgs = [...prev, fallbackMsg];
+      saveMessages(currentSessionId, newMsgs);
+      return newMsgs;
+    });
+  }
+}
+  };
   const updateNodeByStage = (stage: string, stageData: any, isComplete: boolean, isProcessing: boolean) => {
     // Stage names map 1:1 to node types
     const validStages = ['scenes', 'script', 'visuals', 'animations', 'tts', 'render'];
     if (!validStages.includes(stage)) return;
-
     setNodes(prev => {
       const nodeIndex = prev.findIndex(n => n.type === stage);
       if (nodeIndex === -1) return prev;
-
       const node = prev[nodeIndex];
-
       // When marking as processing, keep existing content
       if (isProcessing && !isComplete) {
         const updated = [...prev];
         updated[nodeIndex] = { ...node, isProcessing: true, isComplete: false };
         return updated;
       }
-
       let newContent = { ...node.content };
-
       if (stage === 'scenes' && stageData?.scenes_data?.scenes) {
         const scenes = stageData.scenes_data.scenes;
         const scenesText = scenes.map((s: any) =>
@@ -450,7 +462,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         ).join('\n\n');
         newContent = { text: scenesText, sceneCount: scenes.length };
       }
-
       else if (stage === 'script' && stageData?.script) {
         const scriptItems = Array.isArray(stageData.script) ? stageData.script : [];
         const scriptText = scriptItems.map((s: any) =>
@@ -458,21 +469,17 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         ).join('\n\n---\n\n');
         newContent = { text: scriptText || 'Script generated', scriptCount: scriptItems.length };
       }
-
       else if (stage === 'visuals') {
         newContent = { text: stageData?.message || 'Compositions generated ✅' };
       }
-
       else if (stage === 'animations') {
         const status = stageData?.status || 'complete';
         newContent = { text: stageData?.message || (status === 'skipped' ? 'Animations skipped ⏭' : 'Animations generated ✅') };
       }
-
       else if (stage === 'tts') {
         const audioCount = stageData?.audio_count || 0;
         newContent = { text: stageData?.message || `🔊 Generated ${audioCount} audio files` };
       }
-
       else if (stage === 'render' && stageData?.video_path) {
         let videoUrl = stageData.video_path;
         if (!videoUrl.startsWith('http')) {
@@ -480,7 +487,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         }
         newContent = { url: videoUrl, videoId: stageData?.video_id };
       }
-
       const updated = [...prev];
       updated[nodeIndex] = {
         ...node,
@@ -491,7 +497,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return updated;
     });
   };
-
   const sendWebSocketMessage = (message: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
@@ -499,20 +504,34 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       console.error('WebSocket not connected');
     }
   };
-
+  const createNewSession = (title: string) => {
+    const newId = Date.now().toString();
+    const newSession: ChatSession = { id: newId, title, date: new Date() };
+    setChatSessions(prev => {
+      const newSessions = [newSession, ...prev];
+      saveSessions(newSessions);
+      return newSessions;
+    });
+    setCurrentSessionId(newId);
+    setMessages([]);
+    saveMessages(newId, []);
+    return newId;
+  };
   const initializeWorkflow = (actionName: string) => {
+    // Ensure a chat session exists for persistence
+    if (!currentSessionId) {
+      const title = `Workflow: ${actionName}`;
+      createNewSession(title);
+    }
     const formattedTitle = actionName.replace(/Ads/g, "Advertisements");
     setCreatorAction(formattedTitle);
-
     setPan({ x: 100, y: 100 });
     setScale(1);
-
     const gapX = 320;
     const baseWidth = 280;
     const baseHeight = 260;
     const videoNodeWidth = 480;
     const videoNodeHeight = 360;
-
     // Nodes match the backend pipeline stages 1:1
     const newNodes: WorkflowNodeData[] = [
       {
@@ -559,25 +578,20 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }
     ];
     setNodes(newNodes);
-
     // Store raw action name for when user manually triggers first stage
     pendingActionRef.current = actionName;
-
     // Connect WebSocket only — do NOT auto-start the session
     // User must click the play button on the Scenes node to begin
     connectWebSocket();
   };
-
   const startCreatorSession = (actionName: string) => {
     const currentInput = inputValue.trim() || `Create a ${actionName} video`;
     const config = videoSettings[actionName] || DEFAULT_CONFIGS[actionName];
-
     let payload: any = {
       topic: currentInput,
       persona: config.persona,
       tone: config.tone,
     };
-
     // Add action-specific fields
     if (actionName === 'Clinical Ads') {
       payload.drug_name = currentInput;
@@ -602,22 +616,18 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       payload.key_benefit = config.key_benefit;
       payload.target_audience = config.target_audience;
     }
-
     const message = {
       action: 'start',
       video_type: 'product_ad', // All use product_ad for now
       payload: payload
     };
-
     sendWebSocketMessage(message);
     setInputValue('');
   };
-
   // Video Configuration State
   const [showSettings, setShowSettings] = useState(false);
   const [videoSettings, setVideoSettings] = useState<Record<string, VideoConfig>>(DEFAULT_CONFIGS);
   const [settingsContext, setSettingsContext] = useState<string>('Clinical Ads');
-
   const handleSettingChange = (key: keyof VideoConfig, value: any) => {
     setVideoSettings(prev => ({
       ...prev,
@@ -627,38 +637,31 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }
     }));
   };
-
   // Handle Quick Action Click
   const handleQuickAction = async (text: string) => {
     if (!userData || !userData.companyName) {
       alert("Please complete onboarding first.");
       return;
     }
-
     setSettingsContext(text);
-
     if (selectedMode === 'agent') {
       setActiveChip(text);
     } else {
       initializeWorkflow(text);
     }
   };
-
   // Execute video creation with proper backend integration
   const executeVideoCreation = async (actionType: string) => {
     const endpoint = CREATE_ENDPOINTS[actionType];
     if (!endpoint) return;
-
     const currentInput = inputValue.trim() || `Create a ${actionType} video`;
     const userId = localStorage.getItem("user_id");
-
     const userMsgId = Date.now().toString();
     const userMsg: Message = {
       id: userMsgId,
       role: 'user',
       text: `[Action: ${actionType}] ${currentInput}`
     };
-
     const loadingMsgId = (Date.now() + 1).toString();
     const loadingMsg: Message = {
       id: loadingMsgId,
@@ -666,31 +669,24 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       isLoading: true,
       text: `Creating ${actionType} video...`
     };
-
     setMessages(prev => [...prev, userMsg, loadingMsg]);
     setInputValue('');
-
     // Build FormData with proper file uploads
     const formData = new FormData();
     formData.append('user_id', userId || '');
-
     const config = videoSettings[actionType] || DEFAULT_CONFIGS[actionType];
-
     // Add files based on action type
     if (uploadedLogo) {
       formData.append('logo', uploadedLogo);
     }
-
     // Add multiple images
     uploadedImages.forEach(image => {
       formData.append('images', image);
     });
-
     // Add multiple documents
     uploadedDocuments.forEach(doc => {
       formData.append('documents', doc);
     });
-
     // Add config based on action type
     if (actionType === 'Clinical Ads') {
       formData.append('drug_name', currentInput);
@@ -738,18 +734,14 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       formData.append('tone', config.tone);
       formData.append('quality', config.quality || 'low');
     }
-
     const response = await createVideo(endpoint, formData);
-
     setMessages(prev => prev.map(msg => {
       if (msg.id === loadingMsgId) {
         if (response && response.video_id) {
           let videoUrl = response.video_url || `http://localhost:8000/outputs/videos/${response.video_id}/final.mp4`;
-
           if (videoUrl.startsWith('/')) {
             videoUrl = `http://localhost:8000${videoUrl}`;
           }
-
           startPolling(response.video_id, loadingMsgId, videoUrl);
           return {
             ...msg,
@@ -768,27 +760,22 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }
       return msg;
     }));
-
     // Clear uploaded files after successful submission
     setUploadedDocuments([]);
     setUploadedImages([]);
     setUploadedLogo(null);
   };
-
   const startPolling = (videoId: string, messageId: string, videoUrl: string) => {
     const pollInterval = 5000;
     const maxAttempts = 120;
     let attempts = 0;
-
     const intervalId = setInterval(async () => {
       attempts++;
       try {
         const res = await fetch(videoUrl, { method: 'HEAD' });
-
         if (res.ok) {
           clearInterval(intervalId);
           console.log(`Video ${videoId} is ready!`);
-
           setMessages(prev => prev.map(msg => {
             if (msg.id === messageId) {
               return {
@@ -806,7 +793,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       } catch (error) {
         console.error("Polling error:", error);
       }
-
       if (attempts >= maxAttempts) {
         clearInterval(intervalId);
         setMessages(prev => prev.map(msg => {
@@ -822,16 +808,13 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }
     }, pollInterval);
   };
-
   // --- BACKEND INTEGRATION ---
-
   const createVideo = async (endpoint: string, formData: FormData) => {
     try {
       const res = await fetch(`http://localhost:8000${endpoint}`, {
         method: "POST",
         body: formData
       });
-
       if (!res.ok) {
         const errorText = await res.text();
         throw new Error(`Video creation failed: ${errorText}`);
@@ -842,21 +825,17 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return null;
     }
   };
-
   const uploadDocument = async (file: File) => {
     try {
       const formData = new FormData();
       const userId = localStorage.getItem("user_id");
       if (!userId) throw new Error("No user_id found");
-
       formData.append("user_id", userId);
       formData.append("file", file);
-
       const res = await fetch("http://localhost:8000/chat/upload-document", {
         method: "POST",
         body: formData
       });
-
       if (!res.ok) throw new Error("Upload failed");
       return await res.json();
     } catch (error) {
@@ -864,12 +843,10 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return null;
     }
   };
-
   const sendMessage = async (message: string) => {
     try {
       const userId = localStorage.getItem("user_id");
       if (!userId) throw new Error("No user_id found");
-
       const res = await fetch("http://localhost:8000/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -879,7 +856,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
           use_rag: true
         })
       });
-
       if (!res.ok) throw new Error("Message send failed");
       return await res.json();
     } catch (error) {
@@ -887,56 +863,38 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return { reply: "Sorry, I encountered an error connecting to the server.", role: "assistant" };
     }
   };
-
   const handleGenerate = async () => {
     if (!inputValue.trim() && !activeChip && !attachedFile) return;
-
     const currentInput = inputValue;
     const currentFile = attachedFile;
     const currentChip = activeChip;
-
     setInputValue('');
     setAttachedFile(null);
-
+    // Ensure session exists
+    if (!currentSessionId) {
+      const title = currentChip ? `Chat: ${currentChip}` : "New Conversation";
+      createNewSession(title);
+    }
     // If there's an active chip (selected action), execute video creation
     if (currentChip && CREATE_ENDPOINTS[currentChip]) {
       await executeVideoCreation(currentChip);
       setActiveChip(null);
       return;
     }
-
     // Otherwise, handle as normal chat
     const chipText = currentChip ? `[Selected Mode: ${currentChip}] ` : '';
     const fileText = currentFile ? `[Attached: ${currentFile.name}] ` : '';
     const userText = chipText + fileText + currentInput;
-
     const userMsgId = Date.now().toString();
     const userMsg: Message = { id: userMsgId, role: 'user', text: userText };
-
     const loadingMsgId = (Date.now() + 1).toString();
     const loadingMsg: Message = { id: loadingMsgId, role: 'ai', isLoading: true };
-
     setMessages(prev => [...prev, userMsg, loadingMsg]);
-
-    if (!currentSessionId) {
-      const newId = Date.now().toString();
-      let title = "New Conversation";
-      if (currentInput) {
-        title = currentInput.slice(0, 30) + (currentInput.length > 30 ? "..." : "");
-      } else if (currentChip) {
-        title = currentChip;
-      }
-      setChatSessions(prev => [{ id: newId, title, date: new Date() }, ...prev]);
-      setCurrentSessionId(newId);
-    }
-
     try {
       if (currentFile) {
         await uploadDocument(currentFile);
       }
-
       const response = await sendMessage(userText);
-
       setMessages(prev => prev.map(msg => {
         if (msg.id === loadingMsgId) {
           return {
@@ -948,7 +906,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         }
         return msg;
       }));
-
     } catch (error) {
       console.error("Chat interaction failed:", error);
       setMessages(prev => prev.map(msg => {
@@ -964,24 +921,20 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       }));
     }
   };
-
   const handleNewChat = () => {
-    setMessages([]);
+    const title = "New Conversation";
+    createNewSession(title);
     setInputValue('');
     setActiveChip(null);
     setAttachedFile(null);
-    setCurrentSessionId(null);
     setUploadedDocuments([]);
     setUploadedImages([]);
     setUploadedLogo(null);
   };
-
   // --- FILE UPLOAD HANDLERS ---
-
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-
     const newDocs = Array.from(files).filter((f: File) =>
       f.type === 'application/pdf' ||
       f.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -990,42 +943,31 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       f.name.endsWith('.docx') ||
       f.name.endsWith('.txt')
     );
-
     setUploadedDocuments(prev => [...prev, ...newDocs]);
   };
-
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-
     const newImages = Array.from(files).filter((f: File) =>
       f.type.startsWith('image/')
     );
-
     setUploadedImages(prev => [...prev, ...newImages]);
   };
-
-
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setUploadedLogo(e.target.files[0]);
     }
   };
-
   const removeDocument = (index: number) => {
     setUploadedDocuments(prev => prev.filter((_, i) => i !== index));
   };
-
   const removeImage = (index: number) => {
     setUploadedImages(prev => prev.filter((_, i) => i !== index));
   };
-
   const removeLogo = () => {
     setUploadedLogo(null);
   };
-
   // --- CANVAS & NODE OPERATIONS ---
-
   const updateNodeContent = (id: string, newContent: any, isComplete?: boolean, isProcessing?: boolean) => {
     setNodes(prev => prev.map(n => {
       if (n.id === id) {
@@ -1039,16 +981,14 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       return n;
     }));
   };
-
   const runNodeProcess = async (nodeId: string) => {
     const node = nodesRef.current.find(n => n.id === nodeId);
     if (!node) return;
-
     // If no session started yet (first stage trigger), start the creator session
     if (!currentVideoIdRef.current && pendingActionRef.current) {
       console.log(`▶️ Starting creator session from node: ${node.title}`);
       showToast('Starting creator session...', 'info');
-      
+     
       // Wait briefly for WebSocket to be fully connected, then start session
       const waitForConnection = () => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -1061,7 +1001,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       waitForConnection();
       return;
     }
-
     // If node is complete, this is a regenerate action
     if (node.isComplete) {
       console.log(`🔄 Regenerating stage for node: ${node.title}`);
@@ -1069,7 +1008,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       sendWebSocketMessage({ action: 'regenerate' });
       return;
     }
-
     // If node is not complete and not processing, this is an accept action
     // (automatically accept and move to next stage)
     if (!node.isProcessing) {
@@ -1078,10 +1016,8 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       sendWebSocketMessage({ action: 'accept' });
     }
   };
-
   const toggleTTS = (text: string) => {
     if (!('speechSynthesis' in window)) return;
-
     if (ttsState === 'playing') {
       window.speechSynthesis.pause();
       setTtsState('paused');
@@ -1097,9 +1033,7 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       setTtsState('playing');
     }
   };
-
   // --- CANVAS EVENTS ---
-
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     if (isGlobalProcessing) return;
     if (selectedMode !== 'creator') return;
@@ -1107,7 +1041,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
     setIsPanning(true);
     panStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
   };
-
   const handleCanvasMouseMove = (e: React.MouseEvent) => {
     if (selectedMode !== 'creator') return;
     if (draggedNode) {
@@ -1120,9 +1053,7 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       setPan({ x: e.clientX - panStart.current.x, y: e.clientY - panStart.current.y });
     }
   };
-
   const handleCanvasMouseUp = () => { setIsPanning(false); setDraggedNode(null); };
-
   const handleWheel = (e: React.WheelEvent) => {
     if (selectedMode !== 'creator') return;
     if (e.ctrlKey || e.metaKey) {
@@ -1133,15 +1064,12 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       setPan(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
     }
   };
-
   const startDragNode = (e: React.MouseEvent, nodeId: string, nodeX: number, nodeY: number) => {
     e.stopPropagation();
     setDraggedNode(nodeId);
     dragNodeOffset.current = { x: e.clientX - (nodeX * scale), y: e.clientY - (nodeY * scale) };
   };
-
   // --- RENDER NODES ---
-
   const renderNodeContent = (node: WorkflowNodeData) => {
     // --- Input node (always complete, editable) ---
     if (node.type === 'input') {
@@ -1157,7 +1085,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         </div>
       );
     }
-
     // --- Render / Final Video node ---
     if (node.type === 'render') {
       return (
@@ -1187,7 +1114,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
         </div>
       );
     }
-
     // --- All pipeline stage nodes (scenes, script, visuals, animations, tts) ---
     return (
       <div className="flex flex-col h-full relative">
@@ -1202,7 +1128,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             </button>
           </div>
         )}
-
         {/* Processing state — spinner */}
         {node.isProcessing && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
@@ -1210,7 +1135,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             <span className="text-xs text-gray-500 font-medium">Generating...</span>
           </div>
         )}
-
         {/* Complete state — show the result */}
         {node.isComplete && (
           <>
@@ -1225,7 +1149,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                 onWheel={(e) => e.stopPropagation()}
               />
             </div>
-
             {/* Bottom action buttons */}
             <div className="absolute bottom-1 right-1 flex gap-2">
               {node.type === 'script' && (
@@ -1250,7 +1173,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       </div>
     );
   };
-
   const renderInputBox = () => {
     return (
       <div className="w-full relative bg-white rounded-full shadow-lg border border-gray-200 focus-within:border-emerald-500 focus-within:shadow-xl transition-all duration-300 px-1 py-1 flex items-center">
@@ -1267,7 +1189,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             <Paperclip size={20} />
           </label>
         </div>
-
         <div className="flex-1 flex items-center min-h-[44px] px-2 gap-2 overflow-hidden">
           {attachedFile && (
             <div className="flex-shrink-0 bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm whitespace-nowrap">
@@ -1292,7 +1213,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
               </button>
             </div>
           )}
-
           {/* File Upload Indicators */}
           {uploadedDocuments.length > 0 && (
             <div className="flex-shrink-0 bg-purple-100 text-purple-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm">
@@ -1312,7 +1232,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
               <span>Logo</span>
             </div>
           )}
-
           {showSettings && (
             <div className="relative top-full mt-4 right-0
   w-[400px]
@@ -1328,11 +1247,10 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                   <X size={16} />
                 </button>
               </div>
-
               {/* File Upload Section */}
               <div className="mb-6 pb-6 border-b border-gray-100">
                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Upload Assets</h4>
-                
+               
                 {/* Logo Upload */}
                 <div className="mb-4">
                   <label className="block text-xs font-medium text-gray-600 mb-2">Company Logo</label>
@@ -1352,7 +1270,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     </label>
                   )}
                 </div>
-
                 {/* Product Images Upload */}
                 <div className="mb-4">
                   <label className="block text-xs font-medium text-gray-600 mb-2">Product Images</label>
@@ -1373,7 +1290,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     </label>
                   </div>
                 </div>
-
                 {/* Documents Upload */}
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-2">Reference Documents (PDF, DOCX, TXT)</label>
@@ -1395,7 +1311,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                   </div>
                 </div>
               </div>
-
               <div className="mb-4">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Configure For</label>
                 <select
@@ -1408,7 +1323,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                   ))}
                 </select>
               </div>
-
               <div className="space-y-4">
                 <div>
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Persona</label>
@@ -1426,7 +1340,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     <option value="scientific and professional">Scientific & Professional</option>
                   </select>
                 </div>
-
                 <div>
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Tone</label>
                   <select
@@ -1442,7 +1355,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     <option value="dramatic and emotional">Dramatic & Emotional</option>
                   </select>
                 </div>
-
                 {videoSettings[settingsContext].quality !== undefined && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Quality</label>
@@ -1459,7 +1371,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     </div>
                   </div>
                 )}
-
                 {settingsContext === 'Disease awareness' && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Region</label>
@@ -1478,7 +1389,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     </select>
                   </div>
                 )}
-
                 {(settingsContext === 'Consumer Ads' || settingsContext === 'Disease awareness' || settingsContext === 'Compliance') && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Brand Name</label>
@@ -1491,7 +1401,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     />
                   </div>
                 )}
-
                 {(settingsContext === 'Mechanism of action' || settingsContext === 'Social media') && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Target Audience</label>
@@ -1504,7 +1413,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     />
                   </div>
                 )}
-
                 {(settingsContext === 'Clinical Ads' || settingsContext === 'Social media') && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Indication</label>
@@ -1517,7 +1425,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     />
                   </div>
                 )}
-
                 {settingsContext === 'Social media' && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Key Benefit</label>
@@ -1530,7 +1437,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     />
                   </div>
                 )}
-
                 {settingsContext === 'Clinical Ads' && (
                   <>
                     <div>
@@ -1555,7 +1461,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     </div>
                   </>
                 )}
-
                 {settingsContext === 'Mechanism of action' && (
                   <div>
                     <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">Condition</label>
@@ -1568,7 +1473,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     />
                   </div>
                 )}
-
                 {settingsContext === 'Consumer Ads' && (
                   <div className="flex items-center justify-between pt-2">
                     <label className="text-sm text-gray-700 font-medium">Use SadTalker (Face Anim)</label>
@@ -1583,7 +1487,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
               </div>
             </div>
           )}
-
           <div className="bg-white rounded-[2rem] shadow-lg border border-gray-100 p-2 flex items-center gap-2 relative z-20">
             <button
               onClick={() => setShowSettings(!showSettings)}
@@ -1592,7 +1495,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             >
               <Settings size={20} />
             </button>
-
             <textarea
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
@@ -1614,7 +1516,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             />
           </div>
         </div>
-
         <div className="flex items-center gap-1 pr-1 h-full">
           {inputValue.trim() || activeChip ? (
             <button
@@ -1632,19 +1533,15 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
       </div>
     );
   };
-
   const getActivePathEndIndex = () => {
     for (let i = nodes.length - 1; i >= 0; i--) {
       if (nodes[i].isProcessing) return i - 1;
     }
     return -1;
   };
-
   const activePathEndIndex = getActivePathEndIndex();
-
   return (
     <div className="h-screen w-screen bg-[#f8fcf9] text-gray-900 font-sans overflow-hidden flex">
-
       <aside
         className={`bg-gradient-to-b from-[#0E3B2E] via-[#0B3327] to-[#08281F] flex flex-col transition-all duration-300 border-r border-white/5 flex-shrink-0 relative z-30 overflow-x-hidden shadow-2xl ${sidebarOpen ? 'w-72' : 'w-0 opacity-0'
           }`}
@@ -1662,7 +1559,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             <Menu size={20} />
           </button>
         </div>
-
         <div className="px-4 py-2 space-y-2 flex-shrink-0">
           <button
             onClick={() => handleModeSwitch('agent')}
@@ -1686,7 +1582,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             Creator Mode
           </button>
         </div>
-
         <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 relative custom-scrollbar">
           <div
             className={`transition-all duration-500 absolute inset-x-4 top-6 ${selectedMode === 'agent'
@@ -1708,14 +1603,17 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             ) : (
               <div className="space-y-1">
                 {chatSessions.map(chat => (
-                  <button key={chat.id} onClick={() => setCurrentSessionId(chat.id)} className={`w-full text-left px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors flex items-center gap-2 group ${currentSessionId === chat.id ? 'bg-white/10 text-white' : 'text-white/70'}`}>
+                  <button key={chat.id} onClick={() => {
+                    setCurrentSessionId(chat.id);
+                    const loadedMsgs = loadMessages(chat.id);
+                    setMessages(loadedMsgs);
+                  }} className={`w-full text-left px-3 py-2.5 rounded-lg hover:bg-white/5 transition-colors flex items-center gap-2 group ${currentSessionId === chat.id ? 'bg-white/10 text-white' : 'text-white/70'}`}>
                     <span className="truncate group-hover:text-white flex-1 text-sm font-medium transition-colors">{chat.title}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
-
           <div
             className={`absolute top-6 left-0 w-full px-4 flex flex-col gap-3 transition-all duration-300 ${selectedMode === 'creator' ? 'visible pointer-events-auto' : 'invisible pointer-events-none delay-[600ms]'
               }`}
@@ -1747,7 +1645,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             </div>
           </div>
         </div>
-
         <div className="p-4 border-t border-white/10 flex-shrink-0 bg-[#0E3B2E]/30">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#2FAE8F] to-[#0E3B2E] border border-white/10 flex items-center justify-center text-white font-bold text-xs shadow-md">
@@ -1759,7 +1656,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
           </div>
         </div>
       </aside>
-
       <main className="flex-1 flex flex-col relative h-full min-w-0 overflow-hidden">
         <header className="absolute top-0 left-0 w-full flex items-center justify-between px-8 py-5 z-40 bg-transparent pointer-events-none">
           <div className="flex items-center gap-4 pointer-events-auto">
@@ -1787,7 +1683,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
             )}
           </div>
         </header>
-
         <div className="relative w-full h-full overflow-hidden">
           <div
             className={`absolute inset-0 flex flex-col transition-opacity duration-300 ease-in-out z-10 ${selectedMode === 'agent' ? 'opacity-100 visible delay-0' : 'opacity-0 invisible delay-[600ms]'
@@ -1795,7 +1690,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
           >
             <div className="absolute inset-0 z-0 pointer-events-none" style={{ backgroundImage: 'radial-gradient(rgba(16, 160, 120, 0.22) 2px, transparent 2px)', backgroundSize: '24px 24px', opacity: 1 }} />
             <div className="absolute inset-0 z-0 pointer-events-none bg-[radial-gradient(circle_at_center,rgba(16,160,120,0.05)_0%,rgba(248,252,249,1)_80%)]" />
-
             {messages.length === 0 && (
               <div className="flex-1 flex flex-col items-center justify-center w-full min-h-0 z-10">
                 <div className="text-center space-y-4 mb-10 px-4 max-w-4xl mx-auto flex-shrink-0">
@@ -1828,7 +1722,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                 </div>
               </div>
             )}
-
             {messages.length > 0 && (
               <div className="flex-1 flex flex-col w-full max-w-5xl mx-auto h-full z-10 pt-20 pb-4 px-4 overflow-hidden">
                 <div className="flex-1 overflow-y-auto pr-2 pb-4 space-y-6 custom-scrollbar">
@@ -1887,7 +1780,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
               </div>
             )}
           </div>
-
           <div
             className={`absolute inset-0 z-0 bg-white transition-opacity duration-300 ease-in-out ${showCanvas ? 'opacity-100 visible' : 'opacity-0 invisible'
               }`}
@@ -1910,13 +1802,11 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                 WebkitMaskImage: 'radial-gradient(circle at center, black 30%, rgba(0,0,0,0.2) 100%)'
               }}
             />
-
             {enlargedImage && (
               <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-10 cursor-pointer" onClick={() => setEnlargedImage(null)}>
                 <img src={enlargedImage} className="max-w-full max-h-full rounded-lg shadow-2xl" alt="Enlarged" />
               </div>
             )}
-
             <div
               className="absolute top-0 left-0 w-full h-full origin-top-left"
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
@@ -1926,7 +1816,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                   <h2 className="text-2xl font-bold text-emerald-900 whitespace-nowrap">{creatorAction}</h2>
                 </div>
               )}
-
               {creatorAction && (
                 <svg className="absolute top-0 left-0 w-[5000px] h-[5000px] pointer-events-none overflow-visible z-0">
                   <defs>
@@ -1941,14 +1830,11 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                     const startY = node.y + node.height / 2;
                     const endX = nextNode.x;
                     const endY = nextNode.y + nextNode.height / 2;
-
                     const controlPoint1X = startX + (endX - startX) * 0.5;
                     const controlPoint1Y = startY;
                     const controlPoint2X = endX - (endX - startX) * 0.5;
                     const controlPoint2Y = endY;
-
                     const isPathActive = i <= activePathEndIndex;
-
                     return (
                       <g key={`conn-${i}`}>
                         <path
@@ -1971,7 +1857,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                   })}
                 </svg>
               )}
-
               <div className={isGlobalProcessing ? 'pointer-events-none' : ''}>
                 {creatorAction && nodes.map((node) => (
                   <div
@@ -1998,7 +1883,7 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                         {node.type === 'render' && <Video size={14} />}
                         {node.title}
                       </div>
-                      
+                     
                       {/* Status Badge */}
                       <div className="flex items-center gap-1">
                         {node.isProcessing && (
@@ -2021,7 +1906,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                         )}
                       </div>
                     </div>
-
                     <div className="flex-1 p-3 overflow-hidden relative">
                       {renderNodeContent(node)}
                     </div>
@@ -2029,7 +1913,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                 ))}
               </div>
             </div>
-
             {!creatorAction && (
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none select-none text-center">
                 <div className="w-[400px] h-[240px] border-2 border-dashed border-emerald-300/50 bg-emerald-50/20 rounded-[32px] flex flex-col items-center justify-center backdrop-blur-[1px] mb-4">
@@ -2037,7 +1920,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
                 </div>
               </div>
             )}
-
             <style>{`
               @keyframes dash {
                 to {
@@ -2056,7 +1938,6 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
           </div>
         </div>
       </main>
-
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-4 right-4 z-50 animate-[slideIn_0.3s_ease-out]">
@@ -2073,7 +1954,7 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
           </div>
         </div>
       )}
-      
+     
       <style>{`
         @keyframes slideIn {
           from {
@@ -2089,5 +1970,4 @@ const MainApp: React.FC<MainAppProps> = ({ userData, initialMode }) => {
     </div>
   );
 };
-
 export default MainApp;
