@@ -2,7 +2,7 @@
 
 ## Demo Video
 
-<a href="https://youtu.be/CsDfPh3ycOA">
+<a href="https://youtu.be/mENxPKIA7MM?si=ua1-EGOez0HX1J9f">
   <img src="https://img.youtube.com/vi/CsDfPh3ycOA/maxresdefault.jpg" alt="Prism Motion Demo" width="800"/>
 </a>
 <br/>
