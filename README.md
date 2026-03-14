@@ -20,7 +20,7 @@ Prism Motion serves all kinds of video needs for pharma companies — from expla
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/prism-motion.git
+git clone https://github.com/Goyam02/Prism-Motion.git
 cd prism-motion
 
 # Backend setup
